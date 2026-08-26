@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Voice Chat</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f0f1e;color:#fff;font-family:-apple-system,system-ui,sans-serif;height:100vh;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;-webkit-tap-highlight-color:transparent}
+.circle{width:140px;height:140px;border-radius:50%;border:none;cursor:pointer;font-size:48px;transition:background .3s ease,transform .1s ease;box-shadow:0 4px 30px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;user-select:none;-webkit-user-select:none;touch-action:manipulation}
+.circle:active{transform:scale(.92)}
+.idle{background:#3a3a5c}
+.listening{background:#e74c3c}
+.thinking{background:#f39c12}
+.speaking{background:#2ecc71}
+.error{background:#c0392b}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.thinking-anim{animation:spin 1.2s linear infinite}
+.pulsing{animation:pulse 1.2s ease-in-out infinite}
+.status{font-size:14px;color:#888;text-align:center;min-height:20px}
+.transcript{position:absolute;bottom:16px;left:16px;right:16px;font-size:13px;line-height:1.6;color:#666;text-align:center;min-height:40px;max-height:140px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.transcript .you{color:#aaa}
+.transcript .bot{color:#5b9ee6}
+.timing{position:absolute;top:12px;left:12px;font-size:11px;color:#444;font-family:monospace}
+.hint{position:absolute;top:12px;right:12px;font-size:11px;color:#444}
+.log{position:absolute;top:40px;right:12px;font-size:10px;color:#aaa;font-family:monospace;max-width:200px;text-align:right;word-break:break-word}
+</style>
+</head>
+<body>
+<div class="timing" id="timing"></div>
+<div class="hint" id="hint">tap to talk, hold to end</div>
+<div class="log" id="log"></div>
+<button class="circle idle" id="btn">🎙</button>
+<div class="status" id="status">Tap to start</div>
+<div class="transcript" id="transcript"></div>
+
+<script>
+const btn=document.getElementById('btn'),status=document.getElementById('status'),
+  tr=document.getElementById('transcript'),tm=document.getElementById('timing'),
+  lg=document.getElementById('log');
+let state='idle',mediaRecorder,chunks=[],ac,analyzer,stream,wakeLock,curAudio;
+let abortController=null;
+let audioQueue=[],isPlaying=false,streamDone=false;
+
+function log(msg){console.log(msg);lg.textContent=msg;}
+
+const S={
+  idle:{t:'🎙',s:'Tap to start',c:'idle'},
+  listening:{t:'⏺',s:'Listening...',c:'listening'},
+  thinking:{t:'···',s:'Thinking...',c:'thinking'},
+  speaking:{t:'🔊',s:'Speaking...',c:'speaking'},
+  error:{t:'!',s:'Error - tap to retry',c:'error'},
+};
+function setS(s){state=s;const c=S[s];btn.className='circle '+c.c;btn.textContent=c.t;status.textContent=c.s
+  // remove animation classes
+  btn.classList.remove('thinking-anim','pulsing');
+  if(s==='thinking')btn.classList.add('thinking-anim');
+}
+
+async function getWakeLock(){try{wakeLock=await navigator.wakeLock.request('screen')}catch(e){}}
+
+async function startListening(){
+  log('startListening...');
+  setS('listening');
+  tr.innerHTML='';
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+    log('mic OK');
+  }catch(e){
+    log('mic DENIED: '+e.name+' '+e.message);
+    setS('error');status.textContent='Mic denied: '+e.message;return
+  }
+  ac=new AudioContext();
+  analyzer=ac.createAnalyser();analyzer.fftSize=512;
+  ac.createMediaStreamSource(stream).connect(analyzer);
+  chunks=[];
+  mediaRecorder=new MediaRecorder(stream);
+  mediaRecorder.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data)};
+  mediaRecorder.start();
+  log('recording started');
+
+  // adaptive silence detection - calibrate ambient noise first
+  const d=new Uint8Array(analyzer.frequencyBinCount);
+  let silenceStart=null,hasSpeech=false;
+  let ambientBaseline=0,calibrationSamples=0;
+  const CALIBRATION_MS=400,SILENCE_MS=800,MAX_RECORD_MS=30000;
+  let dynamicThresh=15; // initial guess, updated after calibration
+  const startTime=Date.now();
+
+  function check(){
+    if(state!=='listening')return;
+    analyzer.getByteFrequencyData(d);
+    let sum=0;for(let i=0;i<d.length;i++)sum+=d[i];
+    const avg=sum/d.length;
+    const elapsed=Date.now()-startTime;
+
+    if(elapsed<CALIBRATION_MS){
+      // calibration phase: measure ambient noise
+      ambientBaseline+=avg;calibrationSamples++;
+      const calib=ambientBaseline/calibrationSamples;
+      dynamicThresh=Math.min(Math.max(calib*2.0+5,12),40); // 2x ambient + 5, clamped 12-40
+      log('calib ambient='+avg.toFixed(1)+' thresh='+dynamicThresh.toFixed(1));
+      requestAnimationFrame(check);return
+    }
+
+    // detection phase
+    if(avg>dynamicThresh){
+      // speech detected
+      silenceStart=null;hasSpeech=true;
+      btn.style.transform='scale('+(1+Math.min(avg/100,.25))+')';
+    } else {
+      btn.style.transform='';
+      if(hasSpeech&&silenceStart===null)silenceStart=Date.now();
+      else if(hasSpeech&&silenceStart&&Date.now()-silenceStart>SILENCE_MS){
+        log('silence detected, sending');
+        stopAndSend();return
+      }
+      // log every ~1s when idle but no speech yet
+      if(!hasSpeech&&elapsed%1000<20)log('waiting avg='+avg.toFixed(1)+' thresh='+dynamicThresh.toFixed(1));
+    }
+
+    // max recording time safety
+    if(elapsed>MAX_RECORD_MS){log('max record time');stopAndSend();return}
+
+    requestAnimationFrame(check);
+  }
+  requestAnimationFrame(check);
+
+  // backup: auto-stop after 14s if no speech detected post-calibration
+  setTimeout(()=>{if(state==='listening'&&!hasSpeech){log('no speech timeout');stopAndSend()}},CALIBRATION_MS+12000);
+}
+
+async function stopAndSend(){
+  if(state!=='listening')return;
+  setS('thinking');
+  btn.classList.add('pulsing');
+
+  // stop recording
+  const sp=new Promise(r=>{mediaRecorder.onstop=r});
+  mediaRecorder.stop();
+  stream.getTracks().forEach(t=>t.stop());
+  await sp;
+  if(ac){ac.close();ac=null}
+  btn.classList.remove('pulsing');
+  log('stopped, chunks:'+chunks.length);
+
+  if(!chunks.length){setS('idle');status.textContent='No audio';setTimeout(()=>setS('idle'),1500);return}
+
+  const blob=new Blob(chunks,{type:'audio/webm'});
+  const fd=new FormData();
+  fd.append('audio',blob,'audio.webm');
+  log('sending '+blob.size+' bytes...');
+
+  try{
+    abortController=new AbortController();
+     const timeoutId=setTimeout(()=>abortController.abort(),300000);
+    const resp=await fetch('/api/chat',{method:'POST',body:fd,signal:abortController.signal});
+    clearTimeout(timeoutId);
+    log('got response '+resp.status);
+    if(!resp.ok||!resp.body){
+      const data=await resp.json().catch(()=>({}));
+      setS('error');status.textContent=data.error||('HTTP '+resp.status);
+      tr.innerHTML=`<div class="you">You: ${esc(data.transcript||'')}</div><div style="color:#e55">${esc(data.error||'Error')}</div>`;
+      return
+    }
+    const transcript=decodeURIComponent(resp.headers.get('X-Transcript')||'');
+    const ttfb=resp.headers.get('X-TTFB')||'';
+    tr.innerHTML=`<div class="you">You: ${esc(transcript)}</div><div class="bot">Bot: ...</div>`;
+    if(ttfb)tm.textContent='ttfb:'+ttfb+'s';else tm.textContent='';
+
+    // Length-prefixed streaming: backend sends [4-byte big-endian length][MP3 data] per sentence.
+    // Each sentence is a complete, playable MP3. Play sequentially as they arrive.
+    const reader = resp.body.getReader();
+    let buf = new Uint8Array(0);
+    audioQueue = []; isPlaying = false; streamDone = false;
+    let totalBytes = 0;
+
+    function playQueue() {
+      if (state !== 'speaking' && state !== 'thinking') { audioQueue.length = 0; return; }
+      if (audioQueue.length === 0) {
+        isPlaying = false;
+        if (streamDone) { log('all audio done, restarting'); setTimeout(() => startListening(), 300); }
+        return;
+      }
+      isPlaying = true;
+      const mp3 = audioQueue.shift();
+      const url = URL.createObjectURL(new Blob([mp3], {type:'audio/mpeg'}));
+      const audio = new Audio(url);
+      curAudio = audio;
+      setS('speaking');
+      audio.onended = () => { URL.revokeObjectURL(url); curAudio = null; playQueue(); };
+      audio.onerror = () => { URL.revokeObjectURL(url); curAudio = null; playQueue(); };
+      audio.play().catch(() => { URL.revokeObjectURL(url); curAudio = null; playQueue(); });
+    }
+
+    (async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            streamDone = true;
+            if (!isPlaying && audioQueue.length === 0 && totalBytes <= 120) {
+              log('no audio received'); setS('idle');
+              status.textContent = 'No response audio';
+              setTimeout(() => setS('idle'), 2000);
+            } else if (!isPlaying) playQueue();
+            break;
+          }
+          const nb = new Uint8Array(buf.length + value.length);
+          nb.set(buf); nb.set(value, buf.length); buf = nb;
+          let offset = 0;
+          while (buf.length - offset >= 4) {
+            const len = (buf[offset]<<24)|(buf[offset+1]<<16)|(buf[offset+2]<<8)|buf[offset+3];
+            if (len === 0 || buf.length - offset < 4+len) break;
+            const mp3Chunk = buf.slice(offset+4, offset+4+len);
+            offset += 4+len;
+            totalBytes += len;
+            // Skip keepalive silence frames (104 bytes = our _MP3_SILENCE)
+            if (len <= 120) continue;
+            audioQueue.push(mp3Chunk);
+            if (!isPlaying) playQueue();
+          }
+          if (offset > 0) buf = buf.slice(offset);
+        }
+        log('stream done: ' + totalBytes + ' bytes');
+      } catch (e) { log('stream error: ' + e.message); if (!isPlaying) setS('idle'); }
+    })();
+  }catch(e){
+     if(e.name==='AbortError'){setS('error');status.textContent='Timeout - answer too long';log('fetch timeout after 300s')}
+    else{setS('error');status.textContent='Network: '+e.message;log('fetch error: '+e.message)}
+  }
+}
+
+function esc(s){return s.replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+// Use both click and touchstart, but prevent double-fire
+let lastTap=0;
+function handleTap(){
+  const now=Date.now();
+  if(now-lastTap<300)return; // ignore double-taps
+  lastTap=now;
+  if(holdFired){holdFired=false;return} // suppress tap after long-press
+  log('tap! state='+state);
+  if(state==='idle'||state==='error'){getWakeLock().then(()=>startListening())}
+  else if(state==='listening'){stopAndSend()}
+  else if(state==='speaking'){
+    audioQueue.length=0;streamDone=true;
+    if(curAudio){curAudio.pause();curAudio=null}
+    isPlaying=false;
+    startListening();
+  }
+  // thinking: ignore
+}
+
+// Long-press to end conversation: stop everything, go to idle
+let pressTimer=null,pressStart=0,holdFired=false;
+const HOLD_MS=600;
+function startHold(){
+  pressStart=Date.now();holdFired=false;
+  pressTimer=setTimeout(()=>{
+    pressTimer=null;holdFired=true;
+    endConversation();
+  },HOLD_MS);
+}
+function cancelHold(){
+  if(pressTimer){clearTimeout(pressTimer);pressTimer=null}
+}
+
+function endConversation(){
+  log('ending conversation');
+  // Abort any in-flight request
+  if(abortController){abortController.abort();abortController=null}
+  // Stop audio playback
+  audioQueue.length=0;streamDone=true;
+  if(curAudio){curAudio.pause();curAudio=null}
+  isPlaying=false;
+  // Stop mic if listening
+  if(mediaRecorder&&mediaRecorder.state==='recording')mediaRecorder.stop();
+  if(stream)stream.getTracks().forEach(t=>t.stop());
+  if(ac){ac.close();ac=null}
+  setS('idle');
+  status.textContent='Conversation ended';
+  tr.innerHTML='';
+  tm.textContent='';
+  setTimeout(()=>{status.textContent='Tap to start';},2000);
+}
+
+btn.addEventListener('click',handleTap);
+btn.addEventListener('touchstart',e=>{e.preventDefault();startHold();},{passive:false});
+btn.addEventListener('touchend',e=>{e.preventDefault();cancelHold();},{passive:false});
+btn.addEventListener('touchcancel',cancelHold);
+btn.addEventListener('mousedown',startHold);
+btn.addEventListener('mouseup',cancelHold);
+btn.addEventListener('mouseleave',cancelHold);
+</script>
+</body>
+</html>

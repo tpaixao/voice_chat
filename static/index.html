@@ -117,7 +117,7 @@ async function startListening(){
   const d=new Uint8Array(analyzer.frequencyBinCount);
   let silenceStart=null,hasSpeech=false;
   let ambientBaseline=0,calibrationSamples=0;
-  const CALIBRATION_MS=400,SILENCE_MS=800,MAX_RECORD_MS=30000;
+  const CALIBRATION_MS=400,SILENCE_MS=1600,MAX_RECORD_MS=30000;
   let dynamicThresh=15; // initial guess, updated after calibration
   const startTime=Date.now();
 

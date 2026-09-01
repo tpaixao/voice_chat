@@ -27,7 +27,7 @@ Keepalive silence frames (104-byte minimal MP3) are sent during tool execution t
 ## Prerequisites
 
 - **Python 3.11+**
-- **[Nanobot](https://github.com/nanobot-ai/nanobot)** installed and configured (`~/.nanobot/config.json` with your model, API keys, SOUL.md, USER.md, MEMORY.md, etc.)
+- **[nanobot](https://github.com/HKUDS/nanobot)** (`nanobot-ai` on PyPI) installed and configured (`~/.nanobot/config.json` with your model, API keys, SOUL.md, USER.md, MEMORY.md, etc.)
 - **Groq API key** for Whisper STT, stored in `~/.nanobot/config.json` under `providers.groq.apiKey`
 - **Ollama** (or any LLM provider) configured in nanobot for the LLM backend
 - **OpenSSL** for generating a self-signed SSL certificate (browsers block `getUserMedia` on non-localhost HTTP)
@@ -45,7 +45,7 @@ Keepalive silence frames (104-byte minimal MP3) are sent during tool execution t
    ```bash
    python3 -m venv .venv
    source .venv/bin/activate
-   pip install fastapi uvicorn httpx edge-tts nanobot
+   pip install fastapi uvicorn httpx edge-tts nanobot-ai
    ```
 
 3. Generate a self-signed SSL certificate:

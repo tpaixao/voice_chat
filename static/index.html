@@ -288,7 +288,7 @@ function endConversation(){
 
 btn.addEventListener('click',handleTap);
 btn.addEventListener('touchstart',e=>{e.preventDefault();startHold();},{passive:false});
-btn.addEventListener('touchend',e=>{e.preventDefault();cancelHold();},{passive:false});
+btn.addEventListener('touchend',e=>{e.preventDefault();cancelHold();if(!holdFired)handleTap();},{passive:false});
 btn.addEventListener('touchcancel',cancelHold);
 btn.addEventListener('mousedown',startHold);
 btn.addEventListener('mouseup',cancelHold);

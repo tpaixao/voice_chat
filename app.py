@@ -28,7 +28,7 @@ bot = None
 groq_api_key: str | None = None
 
 GROQ_MODEL = "whisper-large-v3"
-TTS_VOICE = "en-US-AriaNeural"
+TTS_VOICE = "en-US-JennyNeural"
 SESSION_KEY = "voice_chat"
 LLM_TIMEOUT = 120  # seconds
 
@@ -37,11 +37,40 @@ LLM_TIMEOUT = 120  # seconds
 async def startup() -> None:
     global bot, groq_api_key
 
-    # Load nanobot SDK with full config (SOUL.md, USER.md, MEMORY.md, tools, MCP)
+    # Load nanobot SDK with full config (SOUL.md, USER.md, MEMORY.md, tools)
+    # but tailored for voice: no stealth browser MCP (cuts ~5.7s cold start and
+    # 97 tool schemas from the prompt) and a fast preset (minimax3).
     from nanobot import Nanobot
+    from nanobot.agent.loop import AgentLoop
+    from nanobot.agent.hooks import create_file_edit_activity_hook
+    from nanobot.config.loader import load_config, resolve_config_env_vars
+    from nanobot.providers.image_generation import image_gen_provider_configs
 
-    print("[voice-chat] Loading nanobot from config...")
-    bot = Nanobot.from_config()
+    model_preset = os.environ.get("VOICE_MODEL_PRESET", "minimax3")
+    exclude_mcp = os.environ.get(
+        "VOICE_EXCLUDE_MCP", "stealth-browser-mcp"
+    ).split(",")
+    exclude_mcp = [n.strip().lower() for n in exclude_mcp if n.strip()]
+
+    print(f"[voice-chat] Loading nanobot (preset={model_preset}, excluded MCP={exclude_mcp})...")
+    config = resolve_config_env_vars(load_config(None))
+    removed = [
+        name
+        for name in config.tools.mcp_servers
+        if any(name.lower() == pat or pat in name.lower() for pat in exclude_mcp)
+    ]
+    for name in removed:
+        config.tools.mcp_servers.pop(name)
+    if removed:
+        print(f"[voice-chat] Removed MCP servers: {removed}")
+    config.agents.defaults.model_preset = model_preset
+
+    loop = AgentLoop.from_config(
+        config,
+        image_generation_provider_configs=image_gen_provider_configs(config),
+        hook_factories=[create_file_edit_activity_hook],
+    )
+    bot = Nanobot(loop, config=config)
     print(f"[voice-chat] Nanobot loaded. Model: {bot._loop.model}")
 
     # Read Groq API key from nanobot config

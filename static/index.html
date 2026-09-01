@@ -58,7 +58,40 @@ function setS(s){state=s;const c=S[s];btn.className='circle '+c.c;btn.textConten
   if(s==='thinking')btn.classList.add('thinking-anim');
 }
 
-async function getWakeLock(){try{wakeLock=await navigator.wakeLock.request('screen')}catch(e){}}
+let wakeLockSentinel=null;
+async function getWakeLock(){
+  if(!('wakeLock' in navigator)){
+    log('no wakeLock, secure='+window.isSecureContext);
+    startSilentAudio();
+    return
+  }
+  if(wakeLockSentinel&&!wakeLockSentinel.released)return;
+  try{
+    wakeLockSentinel=await navigator.wakeLock.request('screen');
+    log('screen will stay on');
+    wakeLockSentinel.addEventListener('release',()=>{
+      // OS/page released it (tab hidden); re-acquire when visible again
+      if(document.visibilityState==='visible')getWakeLock();
+    });
+  }catch(e){
+    log('wake lock failed: '+e.name);
+    startSilentAudio();
+  }
+}
+// Fallback: looped silent audio keeps the page in "playing" state on some browsers
+let silentAudio=null;
+function startSilentAudio(){
+  try{
+    if(silentAudio)return;
+    silentAudio=new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=');
+    silentAudio.loop=true;silentAudio.volume=0;
+    silentAudio.play().catch(()=>{log('silent audio blocked')});
+  }catch(e){}
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible')getWakeLock();
+});
+getWakeLock();
 
 async function startListening(){
   log('startListening...');

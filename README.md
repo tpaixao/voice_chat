@@ -64,7 +64,7 @@ Keepalive silence frames (104-byte minimal MP3) are sent during tool execution t
 5. (Optional) Adjust the TTS voice and model in `app.py`:
    ```python
    GROQ_MODEL = "whisper-large-v3"
-   TTS_VOICE = "en-US-AriaNeural"  # see edge_tts docs for available voices
+   TTS_VOICE = "en-US-JennyNeural"  # see edge_tts docs for available voices
    ```
 
 ## Running
@@ -84,14 +84,16 @@ Then open `https://<your-ip>:8092` in a browser. Accept the self-signed certific
 ## Usage
 
 - **Tap** the button to start listening
-- **Tap** again to stop recording and send (or just stop talking; silence detection auto-sends after ~800ms)
+- **Tap** again to stop recording and send (or just stop talking; silence detection auto-sends after ~1.6s)
 - The AI response plays automatically
 - **Tap** while speaking to interrupt and start a new query
 - **Hold** the button for ~600ms to end the conversation
 
 ### Features
 
-- Adaptive silence detection (calibrates to ambient noise in first 400ms)
+- Adaptive silence detection (calibrates to ambient noise in first 400ms, auto-sends after ~1.6s of silence)
+- Screen wake lock (keeps the mic alive on mobile by preventing screen-off)
+- Tap-to-interrupt and hold-to-end interaction model
 - Sentence-level streaming (first audio plays while LLM still generating)
 - Tool call keepalives (connection stays alive during long tool execution)
 - Full nanobot context (SOUL.md, USER.md, MEMORY.md, tools, MCP, session memory)
@@ -103,7 +105,7 @@ Then open `https://<your-ip>:8092` in a browser. Accept the self-signed certific
 |---------|----------|---------|
 | Port | `start_server.sh` | 8092 |
 | STT model | `app.py` | `whisper-large-v3` |
-| TTS voice | `app.py` | `en-US-AriaNeural` |
+| TTS voice | `app.py` | `en-US-JennyNeural` |
 | LLM timeout | `app.py` | 30s (startup), 120s (total) |
 | Session key | `app.py` | `voice_chat` |
 | Max recording | `index.html` | 30s |

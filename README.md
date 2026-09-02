@@ -61,10 +61,17 @@ Keepalive silence frames (104-byte minimal MP3) are sent during tool execution t
    # - Any tools/MCP servers you want available
    ```
 
-5. (Optional) Adjust the TTS voice and model in `app.py`:
-   ```python
-   GROQ_MODEL = "whisper-large-v3"
-   TTS_VOICE = "en-US-JennyNeural"  # see edge_tts docs for available voices
+5. (Optional) Adjust the configuration via environment variables (all have sensible defaults in `app.py`'s constants block):
+
+   | Env var | Default | Description |
+   |---|---|---|
+   | `VOICE_TTS_VOICE` | `en-US-JennyNeural` | edge_tts voice (see `edge-tts --list-voices`) |
+   | `VOICE_MODEL_PRESET` | `minimax3` | nanobot model preset (empty string = nanobot's own default) |
+   | `VOICE_STT_MODEL` | `whisper-large-v3` | Groq Whisper model for STT |
+   | `VOICE_EXCLUDE_MCP` | `stealth-browser-mcp` | comma-separated MCP servers to exclude (empty = exclude none) |
+
+   ```bash
+   VOICE_TTS_VOICE=pt-PT-RaquelNeural VOICE_MODEL_PRESET=glmflash ./start_server.sh
    ```
 
 ## Running

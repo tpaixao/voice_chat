@@ -27,8 +27,22 @@ app = FastAPI(title="Voice Chat")
 bot = None
 groq_api_key: str | None = None
 
-GROQ_MODEL = "whisper-large-v3"
-TTS_VOICE = "en-US-JennyNeural"
+# ============================================================
+# User-configurable constants (env vars override, see README)
+# ============================================================
+# Whisper model for STT
+GROQ_MODEL = os.environ.get("VOICE_STT_MODEL", "whisper-large-v3")
+# edge_tts voice for TTS (e.g. en-US-JennyNeural, pt-PT-RaquelNeural)
+TTS_VOICE = os.environ.get("VOICE_TTS_VOICE", "en-US-JennyNeural")
+# Nanobot model preset (set to empty string to use nanobot's default)
+MODEL_PRESET = os.environ.get("VOICE_MODEL_PRESET", "minimax3")
+# Comma-separated MCP server names to exclude (empty = exclude none)
+EXCLUDE_MCP = [
+    n.strip().lower()
+    for n in os.environ.get("VOICE_EXCLUDE_MCP", "stealth-browser-mcp").split(",")
+    if n.strip()
+]
+
 SESSION_KEY = "voice_chat"
 LLM_TIMEOUT = 120  # seconds
 
@@ -46,13 +60,12 @@ async def startup() -> None:
     from nanobot.config.loader import load_config, resolve_config_env_vars
     from nanobot.providers.image_generation import image_gen_provider_configs
 
-    model_preset = os.environ.get("VOICE_MODEL_PRESET", "minimax3")
-    exclude_mcp = os.environ.get(
-        "VOICE_EXCLUDE_MCP", "stealth-browser-mcp"
-    ).split(",")
-    exclude_mcp = [n.strip().lower() for n in exclude_mcp if n.strip()]
-
-    print(f"[voice-chat] Loading nanobot (preset={model_preset}, excluded MCP={exclude_mcp})...")
+    print(
+        f"[voice-chat] Config: preset={MODEL_PRESET or '(nanobot default)'} "
+        f"tts_voice={TTS_VOICE} stt_model={GROQ_MODEL} excluded_mcp={EXCLUDE_MCP}"
+    )
+    model_preset = MODEL_PRESET
+    exclude_mcp = EXCLUDE_MCP
     config = resolve_config_env_vars(load_config(None))
     removed = [
         name

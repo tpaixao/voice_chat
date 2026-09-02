@@ -129,12 +129,16 @@ async def tts_stream_safe(text: str):
 # Used as keepalive data to prevent browser connection timeout during long LLM responses
 _MP3_SILENCE = bytes([0xFF, 0xFB, 0x50, 0xC4]) + bytes(100)
 
-_SENTENCE_END = re.compile(r"[.!?;:\n]")
+# Sentence end = runs of .!? (plus optional closing quote/bracket) followed by whitespace,
+# where the next word starts with uppercase/digit or the text ends. The capitalization
+# guard prevents splits after common abbreviations ("e.g.", "U.S.", "p.m.", "Dr." + lowercase).
+_SENTENCE_END = re.compile(r"([.!?]+[\"')\\]]?)(?:\s+|$)(?=[A-Z0-9\"']|$)")
 _COMMA = re.compile(r"[,]")
-# Flush a chunk after this many chars even without punctuation (reduces TTFB)
-_SOFT_LIMIT = 60
+# Fallback flush only after this many chars without a sentence end (reduces TTFB
+# for long unpunctuated stretches without breaking normal sentences)
+_SOFT_LIMIT = 150
 # Hard limit: never let a chunk exceed this (TTS quality degrades on very long input)
-_HARD_LIMIT = 120
+_HARD_LIMIT = 300
 
 def split_sentences(text: str):
     """Split text into TTS-sized chunks, returning (chunks, remainder).
@@ -147,18 +151,19 @@ def split_sentences(text: str):
     while True:
         if not buf:
             break
-        # Try sentence-ending punctuation first
+        # Try sentence-ending punctuation first (only when followed by a space/end,
+        # so abbreviations like "e.g." or "U.S." and decimals don't trigger splits)
         m = _SENTENCE_END.search(buf)
         if m and m.end() <= _HARD_LIMIT:
-            chunks.append(buf[: m.end()])
-            buf = buf[m.end():]
+            chunks.append(buf[: m.end()].strip())
+            buf = buf[m.end():].lstrip()
             continue
-        # If buffer is over soft limit, try splitting on comma
+        # Long stretch with no sentence end: fall back to a comma break
         if len(buf) > _SOFT_LIMIT:
             m2 = _COMMA.search(buf, _SOFT_LIMIT)
             if m2:
-                chunks.append(buf[: m2.end()])
-                buf = buf[m2.end():]
+                chunks.append(buf[: m2.end()].strip())
+                buf = buf[m2.end():].lstrip()
                 continue
             # Hard split at hard limit if no punctuation at all
             if len(buf) > _HARD_LIMIT:
@@ -166,12 +171,12 @@ def split_sentences(text: str):
                 cut = buf.rfind(" ", _SOFT_LIMIT, _HARD_LIMIT)
                 if cut == -1:
                     cut = _HARD_LIMIT
-                chunks.append(buf[:cut])
+                chunks.append(buf[:cut].strip())
                 buf = buf[cut:].lstrip()
                 continue
         # Not enough text yet; wait for more
         break
-    return chunks, buf
+    return [c for c in chunks if c], buf
 
 
 async def tts_to_bytes(text: str) -> bytes:
